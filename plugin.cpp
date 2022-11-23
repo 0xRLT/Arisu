@@ -1,103 +1,156 @@
 #include <Windows.h>
 #include <string>
-#include <fstream>
 
 #include "plugin.h"
 #include "patterns.h"
 
+#include <convar.h>
 #include <dbg.h>
+#include <messagebuffer.h>
 
-const char* MSG_ReadString{};
-char MSG_WriteString[MAX_PATH];
-char* PTR_MSG_WriteString = MSG_WriteString;
-char Kei[MAX_PATH];
+#include <hl_sdk/common/protocol.h>
 
-std::string bPath = SvenModAPI()->GetBaseDirectory();
-std::string fPath = bPath + "\\arisu";
-std::string aPath = fPath + "\\list.txt";
-std::string isNull = "-1";
+CMessageBuffer CvarValueBuffer;
+sizebuf_t* clc_buffer;
+void* m_pclc_buffer;
+FILE* list = NULL;
+char line[999][MAX_PATH];
+char cvar[999][MAX_PATH];
+char value[999][MAX_PATH];
+char s_string[MAX_PATH];
+int lines = 0;
 
-bool Exist (const char* MSG_ReadString)
+std::string bPath = (SvenModAPI()->GetBaseDirectory());
+std::string fPath = "\\arisu\\list.txt";
+std::string aPath = bPath + fPath;
+
+bool InList(char* pszCvarName)
 {
-	// awfull code ahead
-
-	std::fstream Arisu;
-	std::string line{};
-	std::string cvar{ MSG_ReadString };
-
-	Arisu.open(aPath, std::fstream::in | std::fstream::out | std::fstream::app);
-
-	if (Arisu.is_open())
+	for (int n = 0; n <= lines - 1; n++)
 	{
-		while (std::getline(Arisu, line))
+		if (strcmp(cvar[n], pszCvarName) == 0)
 		{
-			if (line.find(cvar + " " + "=") != std::string::npos)
+			if (strcmp(value[n], "-1") == 0)
 			{
-				size_t start = 0; // :skull: ?
-				while ((start = line.find(cvar)) != std::string::npos) {
-					line.erase(start, cvar.length()+3);
-				};
-
-				if (line == isNull)
-				{
-					strcpy_s(Kei, "Bad CVAR request");
-				}
-				else
-				{
-					strcpy_s(Kei, line.c_str());
-				}
-
-				strncpy_s(MSG_WriteString, Kei, sizeof(Kei));
-				Arisu.close();
+				strncpy_s(s_string, "Bad CVAR request", 17);
+				return true;
+			}
+			else
+			{
+				strncpy_s(s_string, value[n], sizeof(value[n]));
 				return true;
 			}
 		}
-		Arisu.close();
+	}
+	return false;
+}
+
+bool LoadList()
+{
+	fopen_s(&list, aPath.c_str(), "r");
+
+	if (list == NULL)
+	{
 		return false;
 	}
 	else
 	{
-		Warning("[Arisu] Something went wrong with opening list.txt\n");
-		return false;
+		int n = 0;
+		while (fgets(line[n], sizeof(line[n]), list))
+		{
+			bool IsValue = false;
+			int v_i = 0;
+			line[n][strcspn(line[n], "\n")] = 0;
+			for (int i = 0; i <= strlen(line[n]); i++)
+			{
+				if (!IsValue)
+				{
+					if (line[n][i] == ' ')
+					{
+						IsValue = true;
+						i = i + 2;
+					}
+					else
+					{
+						cvar[n][i] = line[n][i];
+					}
+				}
+				else
+				{
+					value[n][v_i] = line[n][i];
+					v_i++;
+				}
+			}
+			n++;
+		}
+		lines = n;
+		fclose(list);
+		return true;
 	}
 }
 
-DECLARE_CLASS_HOOK(void*, CL_Send_CvarValue2, void*);
-
-DECLARE_CLASS_FUNC(void*, HOOKED_CL_Send_CvarValue2, void* thisptr)
+CON_COMMAND(arisu_reload, "Reloads list file")
 {
-	__asm
+	if (!LoadList())
 	{
-		push esi
-		mov MSG_ReadString, esi
-		pop esi
+		Warning("[Arisu] Failed to reload file list.txt\n");
+		ConColorMsg({ 85, 150, 255, 255 }, "[Arisu] Using latest loaded list\n");
 	}
-	
-	//Msg("[DEBUG} Server is requesting value of: %s\n", MSG_ReadString);
-
-	if (!Exist(MSG_ReadString))
+	else
 	{
+		ConColorMsg({ 85, 150, 255, 255 }, "[Arisu] list.txt reloaded successfully\n");
+	}
+}
 
-		//Msg("[DEBUG} Returned original value for: %s\n", MSG_ReadString);
+DECLARE_HOOK(void, __cdecl, CL_Send_CvarValue2);
 
-		__asm
+DECLARE_FUNC(void, __cdecl, HOOKED_CL_Send_CvarValue2)
+{
+	CNetMessageParams* params = Utils()->GetNetMessageParams();
+	CvarValueBuffer.Init(params->buffer, params->readcount, params->badread);
+
+	CMessageBuffer ClientToServerBuffer;
+	ClientToServerBuffer.Init(clc_buffer);
+
+	int iRequestID = CvarValueBuffer.ReadLong();
+	char* pszCvarName = CvarValueBuffer.ReadString();
+
+	if (strlen(pszCvarName) >= 0xFF)
+	{
+		ClientToServerBuffer.WriteByte(CLC_REQUESTCVARVALUE2);
+		ClientToServerBuffer.WriteLong(iRequestID);
+		ClientToServerBuffer.WriteString(pszCvarName);
+		ClientToServerBuffer.WriteString((char*)"Bad CVAR request");
+	}
+	else
+	{
+		cvar_t* pCvar = CVar()->FindCvar(pszCvarName);
+
+		ClientToServerBuffer.WriteByte(CLC_REQUESTCVARVALUE2);
+		ClientToServerBuffer.WriteLong(iRequestID);
+		ClientToServerBuffer.WriteString(pszCvarName);
+
+		//ConColorMsg({ 40, 255, 40, 255 }, "[Arisu] Server is requesting value of: %s\n", pszCvarName);
+
+		if (!InList(pszCvarName))
 		{
-			mov eax, [ebx+4]
+			if (pCvar != NULL)
+			{
+				ClientToServerBuffer.WriteString((char*)pCvar->string);
+			}
+			else
+			{
+				ClientToServerBuffer.WriteString((char*)"Bad CVAR request");
+			}
 		}
-
-		return ORIG_CL_Send_CvarValue2(thisptr);
+		else
+		{
+			ClientToServerBuffer.WriteString((char*)s_string);
+			ConColorMsg({ 85, 150, 255, 255 }, "[Arisu] Returned value: '%s' for query '%s'\n", s_string, pszCvarName);
+		}
 	}
 
-	//Msg("[DEBUG} Successfully spoofed '%s' with value: %s\n", MSG_ReadString, Kei);
-
-	__asm
-	{
-		push eax
-		pop eax
-		mov eax, [PTR_MSG_WriteString]
-	}
-
-	return ORIG_CL_Send_CvarValue2(thisptr);
+	Utils()->ApplyReadToNetMessageBuffer(&CvarValueBuffer);
 }
 
 api_version_s Arisu::GetAPIVersion()
@@ -110,6 +163,24 @@ bool Arisu::Load(CreateInterfaceFn pfnSvenModFactory, ISvenModAPI* pSvenModAPI, 
 	BindApiToGlobals(pSvenModAPI);
 
 	P_CL_Send_CvarValue2 = MemoryUtils()->FindPattern(SvenModAPI()->Modules()->Hardware, Patterns::Hardware::CL_Send_CvarValue2);
+	m_pclc_buffer = MemoryUtils()->FindPattern(SvenModAPI()->Modules()->Hardware, Patterns::Hardware::clc_buffer);
+
+	if (m_pclc_buffer == NULL)
+	{
+		Warning("[Arisu] Failed to locate \"clc_buffer\"\n");
+		return false;
+	}
+
+	clc_buffer = *reinterpret_cast<sizebuf_t**>((unsigned char*)m_pclc_buffer + 1);
+
+	if (!LoadList()) 
+	{
+		Warning("[Arisu] Failed to open list.txt\n");
+		return false;
+	}
+
+	ConVar_Register();
+
 	return true;
 }
 
@@ -121,6 +192,7 @@ void Arisu::PostLoad(bool bGlobalLoad)
 void Arisu::Unload(void)
 {
 	DetoursAPI()->RemoveDetour(Arisu::D_CL_Send_CvarValue2);
+	ConVar_Unregister();
 }
 
 bool Arisu::Pause(void)
@@ -143,14 +215,28 @@ void Arisu::GameFrame(client_state_t state, double frametime, bool bPostRunCmd)
 	}
 }
 
-PLUGIN_RESULT Arisu::Draw(void)
+void Arisu::Draw(void)
 {
-	return PLUGIN_CONTINUE;
 }
 
-PLUGIN_RESULT Arisu::DrawHUD(float time, int intermission)
+void Arisu::DrawHUD(float time, int intermission)
 {
-	return PLUGIN_CONTINUE;
+}
+
+void Arisu::OnFirstClientdataReceived(client_data_t* pcldata, float flTime)
+{
+}
+
+void Arisu::OnBeginLoading(void)
+{
+}
+
+void Arisu::OnEndLoading(void)
+{
+}
+
+void Arisu::OnDisconnect(void)
+{
 }
 
 const char* Arisu::GetName(void)
@@ -165,7 +251,7 @@ const char* Arisu::GetAuthor(void)
 
 const char* Arisu::GetVersion(void)
 {
-	return "1.0.0";
+	return "1.0.1";
 }
 
 const char* Arisu::GetDescription(void)
@@ -175,7 +261,7 @@ const char* Arisu::GetDescription(void)
 
 const char* Arisu::GetURL(void)
 {
-	return "...";
+	return "https://github.com/Keizawa/Arisu";
 }
 
 const char* Arisu::GetDate(void)
@@ -188,4 +274,6 @@ const char* Arisu::GetLogTag(void)
 	return "ARISU";
 }
 
-EXPOSE_SINGLE_INTERFACE(Arisu, IClientPlugin, CLIENT_PLUGIN_INTERFACE_VERSION);
+Arisu g_Arisu;
+
+EXPOSE_SINGLE_INTERFACE(Arisu, IClientPlugin, CLIENT_PLUGIN_INTERFACE_VERSION, g_Arisu);

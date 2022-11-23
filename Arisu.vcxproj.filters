@@ -36,6 +36,9 @@
     <ClCompile Include="svenmod\shared\sys.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
+    <ClCompile Include="svenmod\shared\messagebuffer.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="patterns.h">

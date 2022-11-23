@@ -25,6 +25,7 @@
     <ClCompile Include="svenmod\shared\features.cpp" />
     <ClCompile Include="svenmod\shared\global_ifaces.cpp" />
     <ClCompile Include="svenmod\shared\interface.cpp" />
+    <ClCompile Include="svenmod\shared\messagebuffer.cpp" />
     <ClCompile Include="svenmod\shared\sys.cpp" />
   </ItemGroup>
   <ItemGroup>

@@ -14,6 +14,8 @@ example_cvar = 9999
 example_cvar2 = -1
 ```
 
+You can use console command 'arisu_reload' to reload the list file after editing it
+
 ## How to install
 
 Extract the build zip file in the Sven Co-op directory
